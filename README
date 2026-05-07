@@ -1,0 +1,25 @@
+SQLite-backed task queues without the polling
+
+Polls PRAGMA data_version on a dedicated connection and turns each commit into a channel send.
+Workers sleep on the channel and drain pending rows when notified, instead of polling the database themselves.
+
+- Idle DBs stay idle since the poll is an in-RAM PRAGMA read; a spinning disk doesn't get woken up by it
+- Producers and consumers decouple through the DB. HTTP handlers, the sqlite3 CLI, cron jobs, other processes - any commit wakes workers
+- The row is the source of truth. Nothing is lost if the app dies between insert and notify
+
+Example:
+
+    n, err := sqlitenotify.NewNotifier(ctx, sqlitenotify.SQLite(db))
+    if err != nil { return err }
+
+    for range n.Listen(ctx, 0, 0) {
+        drainJobs(ctx)
+    }
+    // channel closed after context done
+
+The channel is pre-fired once at startup so the first iteration drains any rows left from a prior crash. Listen takes a min interval to throttle bursts and a max interval to force a wake-up if nothing has fired (0 disables either). Cancel the context to unsubscribe.
+
+Recommendations:
+
+- WAL mode: the change counter check goes through the mmap'd -shm file instead of page 1
+- Disk mount with relatime (Linux default) or noatime. strictatime writes an atime update on every read
