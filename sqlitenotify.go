@@ -9,74 +9,55 @@ import (
 
 const pollInterval = 500 * time.Millisecond
 
-func NewNotifier(ctx context.Context, src Source) (*Notifier, error) {
-	last, err := src.Version(ctx)
-	if err != nil {
-		src.Close()
-		return nil, err
-	}
-
-	w := &Notifier{subs: map[chan struct{}]struct{}{}}
-
-	notify := func() {
-		w.mu.Lock()
-		chs := make([]chan struct{}, 0, len(w.subs))
-		for ch := range w.subs {
-			chs = append(chs, ch)
-		}
-		w.mu.Unlock()
-		for _, ch := range chs {
-			select {
-			case ch <- struct{}{}:
-			default:
-			}
-		}
-	}
-
-	go func() {
-		defer src.Close()
-
-		t := time.NewTicker(pollInterval)
-		defer t.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-t.C:
-				v, err := src.Version(ctx)
-				if err != nil {
-					continue
-				}
-				if v == last {
-					continue
-				}
-				last = v
-
-				notify()
-			}
-		}
-	}()
-
-	return w, nil
-}
-
 type Notifier struct {
 	mu   sync.Mutex
 	subs map[chan struct{}]struct{}
 }
 
-func (w *Notifier) Listen(ctx context.Context, minInterval, maxInterval time.Duration) <-chan struct{} {
+func (n *Notifier) Start(ctx context.Context, src Source) error {
+	defer src.Close()
+
+	last, err := src.Version(ctx)
+	if err != nil {
+		return err
+	}
+
+	t := time.NewTicker(pollInterval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-t.C:
+			v, err := src.Version(ctx)
+			if err != nil {
+				continue
+			}
+			if v == last {
+				continue
+			}
+			last = v
+
+			n.notify()
+		}
+	}
+}
+
+func (n *Notifier) Listen(ctx context.Context, minInterval, maxInterval time.Duration) <-chan struct{} {
 	out := make(chan struct{}, 1)
 	out <- struct{}{}
 
 	raw := make(chan struct{}, 1)
-	w.mu.Lock()
-	w.subs[raw] = struct{}{}
-	w.mu.Unlock()
+	n.mu.Lock()
+	if n.subs == nil {
+		n.subs = map[chan struct{}]struct{}{}
+	}
+	n.subs[raw] = struct{}{}
+	n.mu.Unlock()
 	context.AfterFunc(ctx, func() {
-		w.mu.Lock()
-		delete(w.subs, raw)
-		w.mu.Unlock()
+		n.mu.Lock()
+		delete(n.subs, raw)
+		n.mu.Unlock()
 	})
 
 	go func() {
@@ -109,6 +90,21 @@ func (w *Notifier) Listen(ctx context.Context, minInterval, maxInterval time.Dur
 	}()
 
 	return out
+}
+
+func (n *Notifier) notify() {
+	n.mu.Lock()
+	chs := make([]chan struct{}, 0, len(n.subs))
+	for ch := range n.subs {
+		chs = append(chs, ch)
+	}
+	n.mu.Unlock()
+	for _, ch := range chs {
+		select {
+		case ch <- struct{}{}:
+		default:
+		}
+	}
 }
 
 type Source interface {

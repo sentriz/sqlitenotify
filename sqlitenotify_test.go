@@ -12,10 +12,8 @@ func TestWatchPreFires(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		ctx := t.Context()
 
-		w, err := NewNotifier(ctx, &fakeSource{})
-		if err != nil {
-			t.Fatal(err)
-		}
+		var w Notifier
+		go w.Start(ctx, &fakeSource{})
 
 		ch := w.Listen(ctx, 0, 0)
 
@@ -28,10 +26,9 @@ func TestWatchNotifiesOnBump(t *testing.T) {
 		ctx := t.Context()
 
 		src := &fakeSource{}
-		w, err := NewNotifier(ctx, src)
-		if err != nil {
-			t.Fatal(err)
-		}
+		var w Notifier
+		go w.Start(ctx, src)
+		synctest.Wait()
 
 		ch := w.Listen(ctx, 0, 0)
 		<-ch
@@ -46,15 +43,35 @@ func TestWatchNotifiesOnBump(t *testing.T) {
 	})
 }
 
+func TestWatchListenBeforeStart(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ctx := t.Context()
+
+		src := &fakeSource{}
+		var w Notifier
+
+		ch := w.Listen(ctx, 0, 0)
+		<-ch
+
+		go w.Start(ctx, src)
+		synctest.Wait()
+
+		src.bump()
+		time.Sleep(pollInterval)
+		synctest.Wait()
+
+		recvCh(t, ch, "after bump")
+	})
+}
+
 func TestWatchCoalescesBursts(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		ctx := t.Context()
 
 		src := &fakeSource{}
-		w, err := NewNotifier(ctx, src)
-		if err != nil {
-			t.Fatal(err)
-		}
+		var w Notifier
+		go w.Start(ctx, src)
+		synctest.Wait()
 
 		ch := w.Listen(ctx, 0, 0)
 		<-ch
@@ -75,10 +92,9 @@ func TestWatchThrottle(t *testing.T) {
 		ctx := t.Context()
 
 		src := &fakeSource{}
-		w, err := NewNotifier(ctx, src)
-		if err != nil {
-			t.Fatal(err)
-		}
+		var w Notifier
+		go w.Start(ctx, src)
+		synctest.Wait()
 
 		const throttle = 2 * time.Second
 		ch := w.Listen(ctx, throttle, 0)
@@ -104,10 +120,8 @@ func TestWatchMaxInterval(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		ctx := t.Context()
 
-		w, err := NewNotifier(ctx, &fakeSource{})
-		if err != nil {
-			t.Fatal(err)
-		}
+		var w Notifier
+		go w.Start(ctx, &fakeSource{})
 
 		const maxInterval = 3 * time.Second
 		ch := w.Listen(ctx, 0, maxInterval)
@@ -127,10 +141,8 @@ func TestWatchCancelClosesChannel(t *testing.T) {
 		ctx := t.Context()
 
 		src := &fakeSource{}
-		w, err := NewNotifier(ctx, src)
-		if err != nil {
-			t.Fatal(err)
-		}
+		var w Notifier
+		go w.Start(ctx, src)
 
 		listenCtx, cancel := context.WithCancel(ctx)
 		ch := w.Listen(listenCtx, 0, 0)
